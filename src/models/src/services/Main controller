@@ -1,0 +1,87 @@
+const File = require('../models/fileModel');
+const { uploadFile, deleteFile } = require('../services/cloudStorage');
+const { scanFile } = require('../services/virusScan');
+const fs = require('fs');
+const path = require('path');
+
+exports.uploadFile = async (req, res) => {
+  try {
+    if (!req.files || !req.files.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const file = req.files.file;
+    const storageName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
+    const bucketName = process.env.GCP_BUCKET_NAME || 'default-file-bucket';
+
+    // Save file metadata to database
+    const fileRecord = await File.create({
+      originalName: file.name,
+      storageName,
+      bucketName,
+      size: file.size,
+      mimeType: file.mimetype,
+      uploadedBy: req.user?.id || 'anonymous',
+    });
+
+    // Scan file for viruses
+    const scanResult = await scanFile(file.tempFilePath);
+    fileRecord.isClean = scanResult.isClean;
+    fileRecord.scanResult = JSON.stringify(scanResult.scanResult);
+    await fileRecord.save();
+
+    if (!scanResult.isClean) {
+      // Delete the infected file
+      fs.unlinkSync(file.tempFilePath);
+      return res.status(403).json({ 
+        error: 'File contains malicious content', 
+        details: scanResult.scanResult 
+      });
+    }
+
+    // Upload to GCP if file is clean
+    await uploadFile({
+      data: file.data,
+      storageName,
+      mimeType: file.mimetype,
+    }, bucketName);
+
+    // Clean up temp file
+    fs.unlinkSync(file.tempFilePath);
+
+    res.status(201).json({
+      message: 'File uploaded successfully',
+      file: {
+        id: fileRecord.id,
+        originalName: fileRecord.originalName,
+        size: fileRecord.size,
+        isClean: fileRecord.isClean,
+        createdAt: fileRecord.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'Failed to upload file' });
+  }
+};
+
+exports.getFile = async (req, res) => {
+  try {
+    const file = await File.findByPk(req.params.id);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    res.json({
+      id: file.id,
+      originalName: file.originalName,
+      size: file.size,
+      mimeType: file.mimeType,
+      isClean: file.isClean,
+      createdAt: file.createdAt,
+      downloadUrl: `https://storage.googleapis.com/${file.bucketName}/${file.storageName}`,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve file' });
+  }
+};
