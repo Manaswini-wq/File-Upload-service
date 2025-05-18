@@ -1,0 +1,13 @@
+{
+  "error": "File contains malicious content",
+  "details": {
+    "ClamAV": {
+      "detected": true,
+      "result": "Win.Trojan.Generic-123456"
+    },
+    "VirusTotal": {
+      "detected": true,
+      "result": "Trojan.GenericKD.1234567"
+    }
+  }
+}
